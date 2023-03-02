@@ -61,8 +61,7 @@ output "caller_identity" {
 
 locals {
   tags = {
-    Name      = var.name
-    Workspace = var.name
+    Name = var.name
   }
 }
 
@@ -218,7 +217,7 @@ resource "aws_ecs_task_definition" "podinfo" {
         "logConfiguration" : {
           "logDriver" : "awslogs",
           "options" : {
-            "awslogs-region" : "eu-west-1",
+            "awslogs-region" : var.region,
             "awslogs-group" : aws_cloudwatch_log_group.podinfo.name,
             "awslogs-stream-prefix" : "ec2"
           }
