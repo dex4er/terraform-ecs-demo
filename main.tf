@@ -93,7 +93,13 @@ module "autoscaling_sg" {
   vpc_id      = module.vpc.vpc_id
 
   ingress_cidr_blocks = ["0.0.0.0/0"]
-  ingress_rules       = ["https-443-tcp"]
+  ingress_with_cidr_blocks = [{
+    from_port   = 9898
+    to_port     = 9898
+    protocol    = 6
+    description = "podinfo"
+    cidr_blocks = "0.0.0.0/0"
+  }, ]
 
   egress_rules = ["all-all"]
 
@@ -207,6 +213,7 @@ resource "aws_cloudwatch_log_group" "podinfo" {
 resource "aws_ecs_task_definition" "podinfo" {
   family = "podinfo"
 
+  network_mode = "awsvpc"
   container_definitions = jsonencode(
     [
       {
@@ -214,6 +221,7 @@ resource "aws_ecs_task_definition" "podinfo" {
         "image" : "stefanprodan/podinfo",
         "cpu" : 0,
         "memory" : 128,
+        "networkMode" : "awsvpc",
         "logConfiguration" : {
           "logDriver" : "awslogs",
           "options" : {
@@ -221,10 +229,83 @@ resource "aws_ecs_task_definition" "podinfo" {
             "awslogs-group" : aws_cloudwatch_log_group.podinfo.name,
             "awslogs-stream-prefix" : "ec2"
           }
-        }
+        },
+        "portMappings" : [{
+          "protocol" : "tcp",
+          "containerPort" : 9898,
+          "hostPort" : 9898
+        }]
       }
     ]
   )
+}
+
+module "alb" {
+  source  = "terraform-aws-modules/alb/aws"
+  version = "8.3.1"
+
+  name = var.name
+
+  load_balancer_type = "application"
+
+  vpc_id          = module.vpc.vpc_id
+  subnets         = module.vpc.public_subnets
+  security_groups = [module.vpc.default_security_group_id]
+
+  security_group_rules = {
+    ingress_all_http = {
+      type        = "ingress"
+      from_port   = 80
+      to_port     = 80
+      protocol    = "tcp"
+      description = "HTTP web traffic"
+      cidr_blocks = ["0.0.0.0/0"]
+    }
+    ingress_all_icmp = {
+      type        = "ingress"
+      from_port   = -1
+      to_port     = -1
+      protocol    = "icmp"
+      description = "ICMP"
+      cidr_blocks = ["0.0.0.0/0"]
+    }
+    egress_all = {
+      type        = "egress"
+      from_port   = 0
+      to_port     = 0
+      protocol    = "-1"
+      cidr_blocks = ["0.0.0.0/0"]
+    }
+  }
+
+  target_groups = [
+    {
+      name             = "${var.name}-podinfo"
+      backend_protocol = "HTTP"
+      backend_port     = 9898
+      target_type      = "ip"
+      health_check = {
+        enabled             = true
+        interval            = 30
+        path                = "/healthz"
+        healthy_threshold   = 3
+        unhealthy_threshold = 3
+        timeout             = 6
+        protocol            = "HTTP"
+        matcher             = "200-399"
+      }
+    }
+  ]
+
+  http_tcp_listeners = [
+    {
+      port               = 80
+      protocol           = "HTTP"
+      target_group_index = 0
+    }
+  ]
+
+  tags = local.tags
 }
 
 resource "aws_ecs_service" "podinfo" {
@@ -232,8 +313,30 @@ resource "aws_ecs_service" "podinfo" {
   cluster         = module.ecs.cluster_id
   task_definition = aws_ecs_task_definition.podinfo.arn
 
+  force_new_deployment = true
+
   desired_count = 1
 
   deployment_maximum_percent         = 100
   deployment_minimum_healthy_percent = 0
+
+  network_configuration {
+    security_groups  = [module.vpc.default_security_group_id]
+    subnets          = module.vpc.public_subnets
+    assign_public_ip = false
+  }
+
+  load_balancer {
+    target_group_arn = module.alb.target_group_arns[0]
+    container_name   = "podinfo"
+    container_port   = 9898
+  }
+
+  lifecycle {
+    ignore_changes = [
+      desired_count
+    ]
+  }
+
+  tags = local.tags
 }
