@@ -219,7 +219,7 @@ resource "aws_ecs_task_definition" "podinfo" {
           "logDriver" : "awslogs",
           "options" : {
             "awslogs-region" : "eu-west-1",
-            "awslogs-group" : "${aws_cloudwatch_log_group.podinfo.name}",
+            "awslogs-group" : aws_cloudwatch_log_group.podinfo.name,
             "awslogs-stream-prefix" : "ec2"
           }
         }
